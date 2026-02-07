@@ -185,6 +185,20 @@ def create_splits_logs(split: str, nusc: 'NuScenes') -> List[str]:
 
     return list(logs)
 
+def extract_tokens_for_given_split(nusc, eval_split, sample_tokens_all, splits):
+    split_scenes = []
+    if eval_split == "trainval":
+        split_scenes = splits["train"] + splits["val"]
+    else:
+        split_scenes = splits[eval_split]
+    
+    sample_tokens = []
+    for sample_token in sample_tokens_all:
+        scene_token = nusc.get('sample', sample_token)['scene_token']
+        scene_record = nusc.get('scene', scene_token)
+        if scene_record['name'] in splits[eval_split]:
+            sample_tokens.append(sample_token)
+    return sample_tokens
 
 def create_splits_scenes(verbose: bool = False) -> Dict[str, List[str]]:
     """

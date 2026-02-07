@@ -15,7 +15,7 @@ from nuscenes.eval.detection.utils import category_to_detection_name
 from nuscenes.eval.tracking.data_classes import TrackingBox
 from nuscenes.utils.data_classes import Box
 from nuscenes.utils.geometry_utils import points_in_box
-from nuscenes.utils.splits import create_splits_scenes
+from nuscenes.utils.splits import create_splits_scenes, extract_tokens_for_given_split
 
 
 def load_prediction(result_path: str, max_boxes_per_sample: int, box_cls, verbose: bool = False) \
@@ -74,7 +74,7 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
 
     # Check compatibility of split with nusc_version.
     version = nusc.version
-    if eval_split in {'train', 'val', 'train_detect', 'train_track'}:
+    if eval_split in {'train', 'val', 'trainval', 'train_detect', 'train_track'}:
         assert version.endswith('trainval'), \
             'Error: Requested split {} which is not compatible with NuScenes version {}'.format(eval_split, version)
     elif eval_split in {'mini_train', 'mini_val'}:
@@ -91,13 +91,8 @@ def load_gt(nusc: NuScenes, eval_split: str, box_cls, verbose: bool = False) -> 
         # Check that you aren't trying to cheat :).
         assert len(nusc.sample_annotation) > 0, \
             'Error: You are trying to evaluate on the test set but you do not have the annotations!'
-
-    sample_tokens = []
-    for sample_token in sample_tokens_all:
-        scene_token = nusc.get('sample', sample_token)['scene_token']
-        scene_record = nusc.get('scene', scene_token)
-        if scene_record['name'] in splits[eval_split]:
-            sample_tokens.append(sample_token)
+    
+    sample_tokens = extract_tokens_for_given_split(nusc, eval_split, sample_tokens_all, splits)
 
     all_annotations = EvalBoxes()
 
