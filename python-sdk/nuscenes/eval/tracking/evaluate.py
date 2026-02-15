@@ -105,6 +105,25 @@ class TrackingEval:
         self.tracks_gt = create_tracks(gt_boxes, nusc, self.eval_set, gt=True)
         self.tracks_pred = create_tracks(pred_boxes, nusc, self.eval_set, gt=False)
 
+        # Pre-compute which classes have predicted boxes.
+        # Classes without any detections are skipped during evaluation.
+        self.predicted_classes = self._get_predicted_classes()
+        skipped = set(self.cfg.class_names) - self.predicted_classes
+        if verbose and skipped:
+            print('Skipping classes with no detections: %s' % ', '.join(sorted(skipped)))
+
+    def _get_predicted_classes(self) -> set:
+        """
+        Scan predicted tracks to find which classes have at least one detection.
+        :return: Set of class names present in predictions.
+        """
+        predicted = set()
+        for scene_tracks in self.tracks_pred.values():
+            for boxes in scene_tracks.values():
+                for box in boxes:
+                    predicted.add(box.tracking_name)
+        return predicted
+
     def evaluate(self) -> Tuple[TrackingMetrics, TrackingMetricDataList]:
         """
         Performs the actual evaluation.
@@ -132,6 +151,12 @@ class TrackingEval:
             metric_data_list.set(curr_class_name, curr_md)
 
         for class_name in self.cfg.class_names:
+            if class_name not in self.predicted_classes:
+                # No detections for this class — skip expensive evaluation.
+                if self.verbose:
+                    print('Skipping %s (no detections after filtering)' % class_name)
+                metric_data_list.set(class_name, TrackingMetricData())
+                continue
             accumulate_class(class_name)
 
         # -----------------------------------

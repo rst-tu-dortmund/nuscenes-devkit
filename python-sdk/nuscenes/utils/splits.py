@@ -196,7 +196,7 @@ def extract_tokens_for_given_split(nusc, eval_split, sample_tokens_all, splits):
     for sample_token in sample_tokens_all:
         scene_token = nusc.get('sample', sample_token)['scene_token']
         scene_record = nusc.get('scene', scene_token)
-        if scene_record['name'] in splits[eval_split]:
+        if scene_record['name'] in split_scenes:
             sample_tokens.append(sample_token)
     return sample_tokens
 
@@ -215,6 +215,7 @@ def create_splits_scenes(verbose: bool = False) -> Dict[str, List[str]]:
     all_scenes = train + val + test
     assert len(all_scenes) == 1000 and len(set(all_scenes)) == 1000, 'Error: Splits incomplete!'
     scene_splits = {'train': train, 'val': val, 'test': test,
+                    'trainval': train + val,
                     'mini_train': mini_train, 'mini_val': mini_val,
                     'train_detect': train_detect, 'train_track': train_track}
 
