@@ -153,6 +153,9 @@ sample_result {
     "tracking_score": <float>       -- Object prediction score between 0 and 1 for the class identified by tracking_name.
                                        We average over frame level scores to compute the track level score.
                                        The score is used to determine positive and negative tracks via thresholding.
+    "covariance":     <float> [n][n] -- Optional state covariance matrix P (list of lists).
+                                         If present, this is used to compute NEES on matched true positives.
+    "state_dim":      <int>         -- Optional state dimension metadata for covariance.
 }
 ```
 Note that except for the `tracking_*` fields the result format is identical to the [detection challenge](https://www.nuscenes.org/object-detection).
@@ -280,6 +283,14 @@ Users are asked to provide the runtime of their method:
 Furthermore we propose a number of additional metrics:
 * **TID** (average track initialization duration in seconds): Some trackers require a fixed window of past sensor readings. Trackers may also perform poorly without a good initialization. The purpose of this metric is to measure for each track the initialization duration until the first object was successfully detected. If an object is not tracked, we assign the entire track duration as initialization duration. Then we compute the average over all tracks.     
 * **LGD** (average longest gap duration in seconds): *Frag* measures the number of fragmentations. For the application of Autonomous Driving it is crucial to know how long an object has been missed. We compute this duration for each track. If an object is not tracked, we assign the entire track duration as initialization duration.
+* **TP Translation Error Mean** (`tp_translation_error_mean`, meters): Mean center-distance error over true-positive matches.
+* **TP Scale Error Mean** (`tp_scale_error_mean`, 1-IOU): Mean scale error over true-positive matches.
+* **TP Velocity Error Mean** (`tp_velocity_error_mean`, m/s): Mean velocity L2 error over true-positive matches.
+* **TP Orientation Error Mean** (`tp_orientation_error_mean`, radians): Mean yaw error over true-positive matches.
+* **NEES Mean** (`nees_mean`): Mean normalized estimation error squared over true-positive matches with covariance.
+* **NEES Calibration Score** (`nees_calibration_score`): $(nees\_mean - dof)^2$, where `dof` is the number of state components used in NEES.
+
+If covariance is missing in the result file, evaluation still runs and NEES metrics are reported as `NaN` with warnings.
 
 ### Configuration
 The default evaluation metrics configurations can be found in `nuscenes/eval/tracking/configs/tracking_nips_2019.json`.

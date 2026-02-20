@@ -50,7 +50,9 @@ def interpolate_tracking_boxes(left_box: TrackingBox, right_box: TrackingBox, ri
                                                    right_ratio),  # May be inaccurate.
                        tracking_id=right_box.tracking_id,
                        tracking_name=right_box.tracking_name,
-                       tracking_score=tracking_score)
+                       tracking_score=tracking_score,
+                       covariance=right_box.covariance,
+                       state_dim=right_box.state_dim)
 
 
 def interpolate_tracks(tracks_by_timestamp: DefaultDict[int, List[TrackingBox]]) -> DefaultDict[int, List[TrackingBox]]:

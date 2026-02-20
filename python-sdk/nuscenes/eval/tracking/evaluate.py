@@ -13,7 +13,7 @@ from nuscenes import NuScenes
 from nuscenes.eval.common.config import config_factory
 from nuscenes.eval.common.loaders import load_prediction, load_gt, add_center_dist, filter_eval_boxes
 from nuscenes.eval.tracking.algo import TrackingEvaluation
-from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS
+from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS, TP_ERROR_METRICS, NEES_METRICS
 from nuscenes.eval.tracking.data_classes import TrackingMetrics, TrackingMetricDataList, TrackingConfig, TrackingBox, \
     TrackingMetricData
 from nuscenes.eval.tracking.loaders import create_tracks
@@ -144,6 +144,7 @@ class TrackingEval:
                                          self.cfg.dist_th_tp, self.cfg.min_recall,
                                          num_thresholds=TrackingMetricData.nelem,
                                          metric_worst=self.cfg.metric_worst,
+                                         nees_state_indices=self.cfg.nees_state_indices,
                                          verbose=self.verbose,
                                          output_dir=self.output_dir,
                                          render_classes=self.render_classes)
@@ -193,6 +194,15 @@ class TrackingEval:
                     # Overwrite any nan value with the worst possible value.
                     np.all(values[np.logical_not(np.isnan(values))] >= 0)
                     values[np.isnan(values)] = self.cfg.metric_worst[metric_name]
+                    value = float(np.nanmean(values))
+                metrics.add_label_metric(metric_name, class_name, value)
+
+            # Aggregate TP error and NEES metrics over achieved thresholds.
+            for metric_name in [*TP_ERROR_METRICS, *NEES_METRICS]:
+                values = np.array(md.get_metric(metric_name), dtype=float)
+                if np.all(np.isnan(values)):
+                    value = np.nan
+                else:
                     value = float(np.nanmean(values))
                 metrics.add_label_metric(metric_name, class_name, value)
 

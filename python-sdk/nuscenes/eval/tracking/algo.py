@@ -11,6 +11,7 @@ py-motmetrics at:
 https://github.com/cheind/py-motmetrics
 """
 import os
+import warnings
 from typing import List, Dict, Callable, Tuple
 import unittest
 
@@ -25,9 +26,137 @@ except ModuleNotFoundError:
 
 from nuscenes.eval.tracking.constants import MOT_METRIC_MAP, TRACKING_METRICS
 from nuscenes.eval.tracking.data_classes import TrackingBox, TrackingMetricData
+from nuscenes.eval.common.utils import center_distance, scale_iou, velocity_l2, yaw_diff, quaternion_yaw
+from pyquaternion import Quaternion
 from nuscenes.eval.tracking.mot import MOTAccumulatorCustom
 from nuscenes.eval.tracking.render import TrackingRenderer
 from nuscenes.eval.tracking.utils import print_threshold_metrics, create_motmetrics
+
+
+TP_ERROR_METRIC_MAP = {
+    'tp_translation_error_mean': 'tp_translation_error_mean',
+    'tp_scale_error_mean': 'tp_scale_error_mean',
+    'tp_velocity_error_mean': 'tp_velocity_error_mean',
+    'tp_orientation_error_mean': 'tp_orientation_error_mean',
+}
+
+
+def _normalize_angle_diff(angle: float) -> float:
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
+def _safe_yaw_from_rotation(rotation) -> float:
+    try:
+        quaternion = Quaternion(rotation)
+        if quaternion.norm == 0:
+            return 0.0
+        return float(quaternion_yaw(quaternion))
+    except Exception:
+        return 0.0
+
+
+def compute_tp_errors(gt_box: TrackingBox, pred_box: TrackingBox) -> Dict[str, float]:
+    try:
+        scale_error = float(1.0 - scale_iou(gt_box, pred_box))
+    except Exception:
+        scale_error = np.nan
+
+    try:
+        orientation_error = float(yaw_diff(gt_box, pred_box, period=2 * np.pi))
+    except Exception:
+        orientation_error = np.nan
+
+    return {
+        'tp_translation_error_mean': float(center_distance(gt_box, pred_box)),
+        'tp_scale_error_mean': scale_error,
+        'tp_velocity_error_mean': float(velocity_l2(gt_box, pred_box)),
+        'tp_orientation_error_mean': orientation_error,
+    }
+
+
+def _default_state_vector(box: TrackingBox) -> np.ndarray:
+    yaw = _safe_yaw_from_rotation(box.rotation)
+    return np.array([
+        box.translation[0], box.translation[1], box.translation[2],
+        box.size[0], box.size[1], box.size[2],
+        box.velocity[0], box.velocity[1],
+        yaw,
+    ], dtype=float)
+
+
+def parse_covariance(box: TrackingBox, expected_dim: int, warn_prefix: str) -> np.ndarray:
+    if box.covariance is None:
+        return None
+    try:
+        covariance = np.array(box.covariance, dtype=float)
+    except Exception:
+        warnings.warn(f'{warn_prefix}: invalid covariance format for track {box.tracking_id}.', RuntimeWarning)
+        return None
+
+    if covariance.ndim != 2 or covariance.shape[0] != covariance.shape[1]:
+        warnings.warn(f'{warn_prefix}: covariance must be square for track {box.tracking_id}.', RuntimeWarning)
+        return None
+
+    if box.state_dim is not None and int(box.state_dim) != covariance.shape[0]:
+        warnings.warn(
+            f'{warn_prefix}: state_dim ({box.state_dim}) does not match covariance shape '
+            f'({covariance.shape[0]}x{covariance.shape[1]}) for track {box.tracking_id}.',
+            RuntimeWarning
+        )
+
+    if expected_dim != covariance.shape[0]:
+        warnings.warn(
+            f'{warn_prefix}: covariance dimension mismatch for track {box.tracking_id} '
+            f'(expected {expected_dim}, got {covariance.shape[0]}).',
+            RuntimeWarning
+        )
+        return None
+
+    if not np.allclose(covariance, covariance.T, atol=1e-8):
+        warnings.warn(f'{warn_prefix}: covariance is not symmetric for track {box.tracking_id}.', RuntimeWarning)
+
+    eigvals = np.linalg.eigvalsh(covariance)
+    if np.any(eigvals < -1e-8):
+        warnings.warn(f'{warn_prefix}: covariance is not PSD for track {box.tracking_id}.', RuntimeWarning)
+
+    return covariance
+
+
+def compute_nees(gt_box: TrackingBox,
+                 pred_box: TrackingBox,
+                 state_indices: List[int] = None,
+                 warn_prefix: str = 'Tracking NEES') -> Tuple[float, int]:
+    pred_state = _default_state_vector(pred_box)
+    gt_state = _default_state_vector(gt_box)
+
+    if state_indices is None:
+        indices = list(range(len(pred_state)))
+    else:
+        indices = list(state_indices)
+
+    pred_sel = pred_state[indices]
+    gt_sel = gt_state[indices]
+    residual = pred_sel - gt_sel
+
+    yaw_state_index = 8
+    if yaw_state_index in indices:
+        yaw_pos = indices.index(yaw_state_index)
+        residual[yaw_pos] = _normalize_angle_diff(float(residual[yaw_pos]))
+
+    covariance = parse_covariance(pred_box, expected_dim=len(pred_state), warn_prefix=warn_prefix)
+    if covariance is None:
+        return np.nan, len(indices)
+    covariance_sel = covariance[np.ix_(indices, indices)]
+
+    try:
+        inv_covariance = np.linalg.inv(covariance_sel)
+    except np.linalg.LinAlgError:
+        warnings.warn(f'{warn_prefix}: covariance inversion failed, using pseudo-inverse for {pred_box.tracking_id}.',
+                      RuntimeWarning)
+        inv_covariance = np.linalg.pinv(covariance_sel)
+
+    nees = float(residual.T @ inv_covariance @ residual)
+    return nees, len(indices)
 
 
 class TrackingEvaluation(object):
@@ -40,6 +169,7 @@ class TrackingEvaluation(object):
                  min_recall: float,
                  num_thresholds: int,
                  metric_worst: Dict[str, float],
+                 nees_state_indices: List[int] = None,
                  verbose: bool = True,
                  output_dir: str = None,
                  render_classes: List[str] = None):
@@ -74,6 +204,7 @@ class TrackingEvaluation(object):
         self.min_recall = min_recall
         self.num_thresholds = num_thresholds
         self.metric_worst = metric_worst
+        self.nees_state_indices = nees_state_indices
         self.verbose = verbose
         self.output_dir = output_dir
         self.render_classes = [] if render_classes is None else render_classes
@@ -99,6 +230,7 @@ class TrackingEvaluation(object):
             print('Computing metrics for class %s...\n' % self.class_name)
         accumulators = []
         thresh_metrics = []
+        tp_metric_stats_by_threshold = []
         md = TrackingMetricData()
 
         # Skip missing classes.
@@ -137,13 +269,14 @@ class TrackingEvaluation(object):
                 continue
 
             # Accumulate track data.
-            acc, _ = self.accumulate_threshold(threshold)
+            acc, _, tp_metric_stats = self.accumulate_threshold(threshold)
             accumulators.append(acc)
 
             # Compute metrics for current threshold.
             thresh_name = self.name_gen(threshold)
             thresh_summary = mh.compute(acc, metrics=MOT_METRIC_MAP.keys(), name=thresh_name)
             thresh_metrics.append(thresh_summary)
+            tp_metric_stats_by_threshold.append(tp_metric_stats)
 
             # Print metrics to stdout.
             if self.verbose:
@@ -206,17 +339,70 @@ class TrackingEvaluation(object):
             assert len(all_values) == TrackingMetricData.nelem
             md.set_metric(metric_name, all_values)
 
+        # Store TP error and NEES metrics.
+        extended_metric_names = [
+            'tp_translation_error_mean',
+            'tp_scale_error_mean',
+            'tp_velocity_error_mean',
+            'tp_orientation_error_mean',
+            'nees_mean',
+            'nees_calibration_score'
+        ]
+
+        if len(tp_metric_stats_by_threshold) == 0:
+            for metric_name in extended_metric_names:
+                md.set_metric(metric_name, [np.nan] * TrackingMetricData.nelem)
+            return md
+
+        per_threshold_metrics = {metric_name: [] for metric_name in extended_metric_names}
+        for stats in tp_metric_stats_by_threshold:
+            for metric_name in TP_ERROR_METRIC_MAP.keys():
+                metric_count = stats['tp_error_counts'][metric_name]
+                if metric_count == 0:
+                    value = np.nan
+                else:
+                    value = stats['tp_error_sums'][metric_name] / metric_count
+                per_threshold_metrics[metric_name].append(value)
+
+            if stats['nees_count'] == 0:
+                nees_mean = np.nan
+            else:
+                nees_mean = stats['nees_sum'] / stats['nees_count']
+            per_threshold_metrics['nees_mean'].append(nees_mean)
+
+            if np.isnan(nees_mean) or np.isnan(stats['nees_dof']):
+                calibration = np.nan
+            else:
+                calibration = (nees_mean - stats['nees_dof']) ** 2
+            per_threshold_metrics['nees_calibration_score'].append(calibration)
+
+        for metric_name in extended_metric_names:
+            values = np.array(per_threshold_metrics[metric_name], dtype=float)
+            assert len(rep_counts) == len(values)
+            values = np.concatenate([([v] * r) for (v, r) in zip(values, rep_counts)])
+
+            all_values = [np.nan] * num_unachieved_thresholds
+            all_values.extend(values)
+            assert len(all_values) == TrackingMetricData.nelem
+            md.set_metric(metric_name, all_values)
+
         return md
 
-    def accumulate_threshold(self, threshold: float = None) -> Tuple[pandas.DataFrame, List[float]]:
+    def accumulate_threshold(self, threshold: float = None) -> Tuple[pandas.DataFrame, List[float], Dict[str, float]]:
         """
         Accumulate metrics for a particular recall threshold of the current class.
         The scores are only computed if threshold is set to None. This is used to infer the recall thresholds.
         :param threshold: score threshold used to determine positives and negatives.
-        :return: (The MOTAccumulator that stores all the hits/misses/etc, Scores for each TP).
+        :return: (The MOTAccumulator that stores all the hits/misses/etc, Scores for each TP, TP/NEES stats).
         """
         accs = []
         scores = []  # The scores of the TPs. These are used to determine the recall thresholds initially.
+        tp_error_sums = {metric_name: 0.0 for metric_name in TP_ERROR_METRIC_MAP.keys()}
+        tp_error_counts = {metric_name: 0 for metric_name in TP_ERROR_METRIC_MAP.keys()}
+        nees_sum = 0.0
+        nees_count = 0
+        nees_dof = np.nan
+        missing_covariance_for_nees = False
 
         # Go through all frames and associate ground truth and tracker results.
         # Groundtruth and tracker contain lists for every single frame containing lists detections.
@@ -273,15 +459,38 @@ class TrackingEvaluation(object):
                 # Note that we cannot use timestamp as frameid as motmetrics assumes it's an integer.
                 acc.update(gt_ids, pred_ids, distances, frameid=frame_id)
 
+                events = acc.events.loc[frame_id]
+                matches = events[events.Type == 'MATCH']
+                gt_id_to_box = {box.tracking_id: box for box in frame_gt}
+                pred_id_to_box = {box.tracking_id: box for box in frame_pred}
+                for _, row in matches.iterrows():
+                    gt_match = gt_id_to_box[row.OId]
+                    pred_match = pred_id_to_box[row.HId]
+
+                    tp_errors = compute_tp_errors(gt_match, pred_match)
+                    for metric_name, value in tp_errors.items():
+                        if np.isfinite(value):
+                            tp_error_sums[metric_name] += value
+                            tp_error_counts[metric_name] += 1
+
+                    nees_value, dof = compute_nees(
+                        gt_match,
+                        pred_match,
+                        state_indices=self.nees_state_indices,
+                        warn_prefix=f'Tracking NEES ({self.class_name})'
+                    )
+                    if np.isfinite(nees_value):
+                        nees_sum += nees_value
+                        nees_count += 1
+                        nees_dof = float(dof)
+                    elif pred_match.covariance is None:
+                        missing_covariance_for_nees = True
+
                 # Store scores of matches, which are used to determine recall thresholds.
                 if threshold is None:
-                    events = acc.events.loc[frame_id]
-                    matches = events[events.Type == 'MATCH']
                     match_ids = matches.HId.values
                     match_scores = [tt.tracking_score for tt in frame_pred if tt.tracking_id in match_ids]
                     scores.extend(match_scores)
-                else:
-                    events = None
 
                 # Render the boxes in this frame.
                 if self.class_name in self.render_classes and threshold is None:
@@ -295,7 +504,22 @@ class TrackingEvaluation(object):
         # Merge accumulators
         acc_merged = MOTAccumulatorCustom.merge_event_dataframes(accs)
 
-        return acc_merged, scores
+        if threshold is not None and sum(tp_error_counts.values()) > 0 and nees_count == 0 and missing_covariance_for_nees:
+            warnings.warn(
+                f'Tracking NEES unavailable for class {self.class_name} at threshold {threshold:.4f}: '
+                f'covariance missing for matched true positives.',
+                RuntimeWarning
+            )
+
+        tp_nees_stats = {
+            'tp_error_sums': tp_error_sums,
+            'tp_error_counts': tp_error_counts,
+            'nees_sum': nees_sum,
+            'nees_count': nees_count,
+            'nees_dof': nees_dof
+        }
+
+        return acc_merged, scores, tp_nees_stats
 
     def compute_thresholds(self, gt_box_count: int) -> Tuple[List[float], List[float]]:
         """
@@ -305,7 +529,7 @@ class TrackingEvaluation(object):
         :return: The lists of thresholds and their recall values.
         """
         # Run accumulate to get the scores of TPs.
-        _, scores = self.accumulate_threshold(threshold=None)
+        _, scores, _ = self.accumulate_threshold(threshold=None)
 
         # Abort if no predictions exist.
         if len(scores) == 0:

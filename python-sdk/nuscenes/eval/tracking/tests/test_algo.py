@@ -1,9 +1,11 @@
 import copy
 import unittest
+import warnings
 from collections import defaultdict
 from typing import Tuple, Dict, List
 
 import numpy as np
+from pyquaternion import Quaternion
 
 from nuscenes.eval.common.config import config_factory
 from nuscenes.eval.tracking.algo import TrackingEvaluation
@@ -257,6 +259,77 @@ class TestAlgo(unittest.TestCase):
         assert np.all(md.tid == 0)
         assert np.all(md.frag == 0)
         assert np.all(md.ids == 0)
+
+    def test_tp_error_and_nees_single_match(self):
+        cfg = config_factory('tracking_nips_2019')
+        class_name, tracks_gt = TestAlgo.single_scene()
+
+        for _, boxes in tracks_gt['scene-1'].items():
+            for box in boxes:
+                box.size = (1.0, 1.0, 1.0)
+
+        timestamp_boxes_pred = copy.deepcopy(tracks_gt['scene-1'])
+        for timestamp, boxes in timestamp_boxes_pred.items():
+            for box in boxes:
+                box.rotation = Quaternion(axis=(0, 0, 1), radians=0.0).elements
+                box.covariance = np.eye(9).tolist()
+                box.state_dim = 9
+        timestamp_boxes_pred[0][0].translation = (1.0, 0.0, 0.0)
+        tracks_pred = {'scene-1': timestamp_boxes_pred}
+
+        ev = TrackingEvaluation(tracks_gt, tracks_pred, class_name, cfg.dist_fcn_callable,
+                                cfg.dist_th_tp, cfg.min_recall, num_thresholds=TrackingMetricData.nelem,
+                                metric_worst=cfg.metric_worst, verbose=False)
+        md = ev.accumulate()
+
+        self.assertAlmostEqual(float(np.nanmin(md.tp_translation_error_mean)), 0.25)
+        self.assertAlmostEqual(float(np.nanmin(md.tp_scale_error_mean)), 0.0)
+        self.assertAlmostEqual(float(np.nanmin(md.tp_velocity_error_mean)), 0.0)
+        self.assertAlmostEqual(float(np.nanmin(md.tp_orientation_error_mean)), 0.0)
+        self.assertAlmostEqual(float(np.nanmin(md.nees_mean)), 0.25)
+        self.assertAlmostEqual(float(np.nanmin(md.nees_calibration_score)), (0.25 - 9.0) ** 2)
+
+    def test_nees_warns_on_non_symmetric_covariance(self):
+        cfg = config_factory('tracking_nips_2019')
+        class_name, tracks_gt = TestAlgo.single_scene()
+
+        timestamp_boxes_pred = copy.deepcopy(tracks_gt['scene-1'])
+        bad_cov = np.eye(9)
+        bad_cov[0, 1] = 0.2
+        bad_cov[1, 0] = 0.0
+        for _, boxes in timestamp_boxes_pred.items():
+            for box in boxes:
+                box.covariance = bad_cov.tolist()
+                box.state_dim = 9
+        tracks_pred = {'scene-1': timestamp_boxes_pred}
+
+        ev = TrackingEvaluation(tracks_gt, tracks_pred, class_name, cfg.dist_fcn_callable,
+                                cfg.dist_th_tp, cfg.min_recall, num_thresholds=TrackingMetricData.nelem,
+                                metric_worst=cfg.metric_worst, verbose=False)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            md = ev.accumulate()
+
+        self.assertTrue(any('not symmetric' in str(w.message) for w in caught))
+        self.assertTrue(np.isfinite(float(np.nanmin(md.nees_mean))))
+
+    def test_nees_nan_with_missing_covariance(self):
+        cfg = config_factory('tracking_nips_2019')
+        class_name, tracks_gt = TestAlgo.single_scene()
+        tracks_pred = {'scene-1': copy.deepcopy(tracks_gt['scene-1'])}
+
+        ev = TrackingEvaluation(tracks_gt, tracks_pred, class_name, cfg.dist_fcn_callable,
+                                cfg.dist_th_tp, cfg.min_recall, num_thresholds=TrackingMetricData.nelem,
+                                metric_worst=cfg.metric_worst, verbose=False)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            md = ev.accumulate()
+
+        self.assertTrue(any('NEES unavailable' in str(w.message) for w in caught))
+        self.assertTrue(np.all(np.isnan(md.nees_mean)))
+        self.assertTrue(np.all(np.isnan(md.nees_calibration_score)))
 
     def test_scenarios(self):
         """ More flexible scenario test structure. """

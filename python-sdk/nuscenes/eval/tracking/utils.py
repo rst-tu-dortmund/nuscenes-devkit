@@ -50,7 +50,11 @@ def metric_name_to_print_format(metric_name) -> str:
     :param metric_name: The lowercase metric name.
     :return: The print format.
     """
-    if metric_name in ['amota', 'amotp', 'motar', 'recall', 'mota', 'motp']:
+    if metric_name in [
+        'amota', 'amotp', 'motar', 'recall', 'mota', 'motp',
+        'tp_translation_error_mean', 'tp_scale_error_mean', 'tp_velocity_error_mean',
+        'tp_orientation_error_mean', 'nees_mean', 'nees_calibration_score'
+    ]:
         print_format = '%.3f'
     elif metric_name in ['tid', 'lgd']:
         print_format = '%.2f'

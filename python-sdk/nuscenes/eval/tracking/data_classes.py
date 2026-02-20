@@ -1,7 +1,7 @@
 # nuScenes dev-kit.
 # Code written by Holger Caesar, Caglayan Dicle and Oscar Beijbom, 2019.
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -26,7 +26,8 @@ class TrackingConfig:
                  min_recall: float,
                  max_boxes_per_sample: float,
                  metric_worst: Dict[str, float],
-                 num_thresholds: int):
+                 num_thresholds: int,
+                 nees_state_indices: Optional[List[int]] = None):
 
         assert set(class_range.keys()) == set(tracking_names), "Class count mismatch."
         global TRACKING_NAMES
@@ -41,6 +42,7 @@ class TrackingConfig:
         self.max_boxes_per_sample = max_boxes_per_sample
         self.metric_worst = metric_worst
         self.num_thresholds = num_thresholds
+        self.nees_state_indices = None if nees_state_indices is None else [int(v) for v in nees_state_indices]
 
         TrackingMetricData.set_nelem(num_thresholds)
 
@@ -64,7 +66,8 @@ class TrackingConfig:
             'min_recall': self.min_recall,
             'max_boxes_per_sample': self.max_boxes_per_sample,
             'metric_worst': self.metric_worst,
-            'num_thresholds': self.num_thresholds
+            'num_thresholds': self.num_thresholds,
+            'nees_state_indices': self.nees_state_indices
         }
 
     @classmethod
@@ -79,7 +82,8 @@ class TrackingConfig:
                    content['min_recall'],
                    content['max_boxes_per_sample'],
                    content['metric_worst'],
-                   content['num_thresholds'])
+                   content['num_thresholds'],
+                   content.get('nees_state_indices'))
 
     @property
     def dist_fcn_callable(self):
@@ -117,6 +121,12 @@ class TrackingMetricData(MetricData):
         self.frag = init
         self.tid = init
         self.lgd = init
+        self.tp_translation_error_mean = init
+        self.tp_scale_error_mean = init
+        self.tp_velocity_error_mean = init
+        self.tp_orientation_error_mean = init
+        self.nees_mean = init
+        self.nees_calibration_score = init
 
     def __eq__(self, other):
         eq = True
@@ -278,7 +288,9 @@ class TrackingBox(EvalBox):
                  num_pts: int = -1,  # Nbr. LIDAR or RADAR inside the box. Only for gt boxes.
                  tracking_id: str = '',  # Instance id of this object.
                  tracking_name: str = '',  # The class name used in the tracking challenge.
-                 tracking_score: float = -1.0):  # Does not apply to GT.
+                 tracking_score: float = -1.0,  # Does not apply to GT.
+                 covariance: Optional[List[List[float]]] = None,
+                 state_dim: Optional[int] = None):
 
         super().__init__(sample_token, translation, size, rotation, velocity, ego_translation, num_pts)
 
@@ -292,6 +304,8 @@ class TrackingBox(EvalBox):
         self.tracking_id = tracking_id
         self.tracking_name = tracking_name
         self.tracking_score = tracking_score
+        self.covariance = covariance
+        self.state_dim = state_dim
 
     def __eq__(self, other):
         return (self.sample_token == other.sample_token and
@@ -303,7 +317,9 @@ class TrackingBox(EvalBox):
                 self.num_pts == other.num_pts and
                 self.tracking_id == other.tracking_id and
                 self.tracking_name == other.tracking_name and
-                self.tracking_score == other.tracking_score)
+                self.tracking_score == other.tracking_score and
+                self.covariance == other.covariance and
+                self.state_dim == other.state_dim)
 
     def serialize(self) -> dict:
         """ Serialize instance into json-friendly format. """
@@ -317,7 +333,9 @@ class TrackingBox(EvalBox):
             'num_pts': self.num_pts,
             'tracking_id': self.tracking_id,
             'tracking_name': self.tracking_name,
-            'tracking_score': self.tracking_score
+            'tracking_score': self.tracking_score,
+            'covariance': self.covariance,
+            'state_dim': self.state_dim
         }
 
     @classmethod
@@ -333,7 +351,9 @@ class TrackingBox(EvalBox):
                    num_pts=-1 if 'num_pts' not in content else int(content['num_pts']),
                    tracking_id=content['tracking_id'],
                    tracking_name=content['tracking_name'],
-                   tracking_score=-1.0 if 'tracking_score' not in content else float(content['tracking_score']))
+                   tracking_score=-1.0 if 'tracking_score' not in content else float(content['tracking_score']),
+                   covariance=None if 'covariance' not in content else content['covariance'],
+                   state_dim=None if 'state_dim' not in content else int(content['state_dim']))
 
 
 class TrackingMetricDataList:
