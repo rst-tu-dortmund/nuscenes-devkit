@@ -176,7 +176,7 @@ class TrackingEval:
 
             # Pick best value for traditional metrics.
             if best_thresh_idx is not None:
-                for metric_name in MOT_METRIC_MAP.values():
+                for metric_name in [*MOT_METRIC_MAP.values(), *NEES_METRICS]:
                     if metric_name == '':
                         continue
                     value = md.get_metric(metric_name)[best_thresh_idx]
@@ -198,7 +198,7 @@ class TrackingEval:
                 metrics.add_label_metric(metric_name, class_name, value)
 
             # Aggregate TP error and NEES metrics over achieved thresholds.
-            for metric_name in [*TP_ERROR_METRICS, *NEES_METRICS]:
+            for metric_name in TP_ERROR_METRICS:
                 values = np.array(md.get_metric(metric_name), dtype=float)
                 if np.all(np.isnan(values)):
                     value = np.nan
