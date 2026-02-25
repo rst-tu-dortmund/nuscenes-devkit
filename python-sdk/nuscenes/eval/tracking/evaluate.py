@@ -197,7 +197,7 @@ class TrackingEval:
                     value = float(np.nanmean(values))
                 metrics.add_label_metric(metric_name, class_name, value)
 
-            # Aggregate TP error and NEES metrics over achieved thresholds.
+            # Aggregate TP error over achieved thresholds.
             for metric_name in TP_ERROR_METRICS:
                 values = np.array(md.get_metric(metric_name), dtype=float)
                 if np.all(np.isnan(values)):
