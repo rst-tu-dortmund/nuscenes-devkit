@@ -48,9 +48,13 @@ class TestTrackingDataClasses(unittest.TestCase):
         cfg = config_factory('tracking_nips_2019')
         serialized = cfg.serialize()
         serialized['nees_state_indices'] = [0, 1, 8]
+        serialized['alpha_maha'] = 0.1
+        serialized['alpha_chi2'] = 0.02
 
         restored = TrackingConfig.deserialize(serialized)
         self.assertEqual(restored.nees_state_indices, [0, 1, 8])
+        self.assertEqual(restored.alpha_maha, 0.1)
+        self.assertEqual(restored.alpha_chi2, 0.02)
 
 
 if __name__ == '__main__':

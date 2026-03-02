@@ -13,7 +13,8 @@ from nuscenes import NuScenes
 from nuscenes.eval.common.config import config_factory
 from nuscenes.eval.common.loaders import load_prediction, load_gt, add_center_dist, filter_eval_boxes
 from nuscenes.eval.tracking.algo import TrackingEvaluation
-from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS, TP_ERROR_METRICS, NEES_METRICS
+from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS, TP_ERROR_METRICS, NEES_METRICS, \
+    NEES_SIGNIFICANCE_METRICS
 from nuscenes.eval.tracking.data_classes import TrackingMetrics, TrackingMetricDataList, TrackingConfig, TrackingBox, \
     TrackingMetricData
 from nuscenes.eval.tracking.loaders import create_tracks
@@ -145,6 +146,8 @@ class TrackingEval:
                                          num_thresholds=TrackingMetricData.nelem,
                                          metric_worst=self.cfg.metric_worst,
                                          nees_state_indices=self.cfg.nees_state_indices,
+                                         alpha_maha=self.cfg.alpha_maha,
+                                         alpha_chi2=self.cfg.alpha_chi2,
                                          verbose=self.verbose,
                                          output_dir=self.output_dir,
                                          render_classes=self.render_classes)
@@ -176,10 +179,12 @@ class TrackingEval:
 
             # Pick best value for traditional metrics.
             if best_thresh_idx is not None:
-                for metric_name in [*MOT_METRIC_MAP.values(), *NEES_METRICS]:
+                for metric_name in [*MOT_METRIC_MAP.values(), *NEES_METRICS, *NEES_SIGNIFICANCE_METRICS]:
                     if metric_name == '':
                         continue
                     value = md.get_metric(metric_name)[best_thresh_idx]
+                    if metric_name == 'chi2_significant' and not np.isnan(value):
+                        value = bool(value)
                     metrics.add_label_metric(metric_name, class_name, value)
 
             # Compute AMOTA / AMOTP.

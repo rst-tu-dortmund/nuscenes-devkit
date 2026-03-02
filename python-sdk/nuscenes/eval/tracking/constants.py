@@ -12,7 +12,24 @@ TP_ERROR_METRICS = [
     'tp_orientation_error_mean'
 ]
 NEES_METRICS = ['nees_mean', 'nees_calibration_score']
-TRACKING_METRICS = [*AMOT_METRICS, *INTERNAL_METRICS, *LEGACY_METRICS, *TP_ERROR_METRICS, *NEES_METRICS]
+NEES_SIGNIFICANCE_METRICS = [
+    'maha_threshold',
+    'count_inside',
+    'count_outside',
+    'pct_inside',
+    'pct_outside',
+    'chi2_statistic',
+    'chi2_critical',
+    'chi2_significant'
+]
+TRACKING_METRICS = [
+    *AMOT_METRICS,
+    *INTERNAL_METRICS,
+    *LEGACY_METRICS,
+    *TP_ERROR_METRICS,
+    *NEES_METRICS,
+    *NEES_SIGNIFICANCE_METRICS
+]
 
 # Define mapping for metrics averaged over classes.
 AVG_METRIC_MAP = {  # Mapping from average metric name to individual per-threshold metric name.

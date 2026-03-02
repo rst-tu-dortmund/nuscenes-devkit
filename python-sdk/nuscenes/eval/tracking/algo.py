@@ -18,6 +18,7 @@ import unittest
 import numpy as np
 import sklearn
 import tqdm
+from scipy.stats import chi2
 
 try:
     import pandas
@@ -39,6 +40,82 @@ TP_ERROR_METRIC_MAP = {
     'tp_velocity_error_mean': 'tp_velocity_error_mean',
     'tp_orientation_error_mean': 'tp_orientation_error_mean',
 }
+
+
+def maha_threshold_from_alpha(dof: int, alpha_maha: float) -> float:
+    if dof <= 0:
+        return np.nan
+    return float(chi2.ppf(1.0 - alpha_maha, dof))
+
+
+def categorize_mahalanobis_distances(nees_values: np.ndarray,
+                                     dof: int,
+                                     alpha_maha: float) -> Dict[str, float]:
+    threshold = maha_threshold_from_alpha(dof, alpha_maha)
+    finite_values = np.asarray(nees_values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    total = int(len(finite_values))
+
+    if total == 0 or np.isnan(threshold):
+        return {
+            'maha_threshold': threshold,
+            'count_inside': np.nan,
+            'count_outside': np.nan,
+            'pct_inside': np.nan,
+            'pct_outside': np.nan
+        }
+
+    count_inside = int(np.sum(finite_values <= threshold))
+    count_outside = int(total - count_inside)
+    pct_inside = float(count_inside / total * 100.0)
+    pct_outside = float(count_outside / total * 100.0)
+
+    return {
+        'maha_threshold': threshold,
+        'count_inside': float(count_inside),
+        'count_outside': float(count_outside),
+        'pct_inside': pct_inside,
+        'pct_outside': pct_outside
+    }
+
+
+def pearson_chi2_two_category(count_inside: float,
+                              count_outside: float,
+                              alpha_maha: float,
+                              alpha_chi2: float) -> Dict[str, float]:
+    if np.isnan(count_inside) or np.isnan(count_outside):
+        return {
+            'chi2_statistic': np.nan,
+            'chi2_critical': np.nan,
+            'chi2_significant': np.nan
+        }
+
+    total = float(count_inside + count_outside)
+    if total <= 0:
+        return {
+            'chi2_statistic': np.nan,
+            'chi2_critical': np.nan,
+            'chi2_significant': np.nan
+        }
+
+    expected_inside = (1.0 - alpha_maha) * total
+    expected_outside = alpha_maha * total
+    if expected_inside <= 0 or expected_outside <= 0:
+        return {
+            'chi2_statistic': np.nan,
+            'chi2_critical': np.nan,
+            'chi2_significant': np.nan
+        }
+
+    chi2_statistic = ((count_inside - expected_inside) ** 2 / expected_inside) + \
+        ((count_outside - expected_outside) ** 2 / expected_outside)
+    chi2_critical = float(chi2.ppf(1.0 - alpha_chi2, 1))
+
+    return {
+        'chi2_statistic': float(chi2_statistic),
+        'chi2_critical': chi2_critical,
+        'chi2_significant': float(chi2_statistic <= chi2_critical)
+    }
 
 
 def _normalize_angle_diff(angle: float) -> float:
@@ -170,6 +247,8 @@ class TrackingEvaluation(object):
                  num_thresholds: int,
                  metric_worst: Dict[str, float],
                  nees_state_indices: List[int] = None,
+                 alpha_maha: float = 0.05,
+                 alpha_chi2: float = 0.01,
                  verbose: bool = True,
                  output_dir: str = None,
                  render_classes: List[str] = None):
@@ -205,6 +284,8 @@ class TrackingEvaluation(object):
         self.num_thresholds = num_thresholds
         self.metric_worst = metric_worst
         self.nees_state_indices = nees_state_indices
+        self.alpha_maha = float(alpha_maha)
+        self.alpha_chi2 = float(alpha_chi2)
         self.verbose = verbose
         self.output_dir = output_dir
         self.render_classes = [] if render_classes is None else render_classes
@@ -346,7 +427,15 @@ class TrackingEvaluation(object):
             'tp_velocity_error_mean',
             'tp_orientation_error_mean',
             'nees_mean',
-            'nees_calibration_score'
+            'nees_calibration_score',
+            'maha_threshold',
+            'count_inside',
+            'count_outside',
+            'pct_inside',
+            'pct_outside',
+            'chi2_statistic',
+            'chi2_critical',
+            'chi2_significant'
         ]
 
         if len(tp_metric_stats_by_threshold) == 0:
@@ -376,6 +465,23 @@ class TrackingEvaluation(object):
                 calibration = (nees_mean - stats['nees_dof']) ** 2
             per_threshold_metrics['nees_calibration_score'].append(calibration)
 
+            significance_stats = categorize_mahalanobis_distances(
+                stats['nees_values'],
+                int(stats['nees_dof']) if np.isfinite(stats['nees_dof']) else 0,
+                self.alpha_maha
+            )
+            chi2_stats = pearson_chi2_two_category(
+                significance_stats['count_inside'],
+                significance_stats['count_outside'],
+                self.alpha_maha,
+                self.alpha_chi2
+            )
+
+            for metric_name in ['maha_threshold', 'count_inside', 'count_outside', 'pct_inside', 'pct_outside']:
+                per_threshold_metrics[metric_name].append(significance_stats[metric_name])
+            for metric_name in ['chi2_statistic', 'chi2_critical', 'chi2_significant']:
+                per_threshold_metrics[metric_name].append(chi2_stats[metric_name])
+
         for metric_name in extended_metric_names:
             values = np.array(per_threshold_metrics[metric_name], dtype=float)
             assert len(rep_counts) == len(values)
@@ -401,6 +507,7 @@ class TrackingEvaluation(object):
         tp_error_counts = {metric_name: 0 for metric_name in TP_ERROR_METRIC_MAP.keys()}
         nees_sum = 0.0
         nees_count = 0
+        nees_values = []
         nees_dof = np.nan
         missing_covariance_for_nees = False
 
@@ -482,6 +589,7 @@ class TrackingEvaluation(object):
                     if np.isfinite(nees_value):
                         nees_sum += nees_value
                         nees_count += 1
+                        nees_values.append(nees_value)
                         nees_dof = float(dof)
                     elif pred_match.covariance is None:
                         missing_covariance_for_nees = True
@@ -516,6 +624,7 @@ class TrackingEvaluation(object):
             'tp_error_counts': tp_error_counts,
             'nees_sum': nees_sum,
             'nees_count': nees_count,
+            'nees_values': np.array(nees_values, dtype=float),
             'nees_dof': nees_dof
         }
 

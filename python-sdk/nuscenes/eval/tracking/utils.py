@@ -53,7 +53,8 @@ def metric_name_to_print_format(metric_name) -> str:
     if metric_name in [
         'amota', 'amotp', 'motar', 'recall', 'mota', 'motp',
         'tp_translation_error_mean', 'tp_scale_error_mean', 'tp_velocity_error_mean',
-        'tp_orientation_error_mean', 'nees_mean', 'nees_calibration_score'
+        'tp_orientation_error_mean', 'nees_mean', 'nees_calibration_score',
+        'maha_threshold', 'pct_inside', 'pct_outside', 'chi2_statistic', 'chi2_critical'
     ]:
         print_format = '%.3f'
     elif metric_name in ['tid', 'lgd']:
@@ -63,6 +64,23 @@ def metric_name_to_print_format(metric_name) -> str:
     else:
         print_format = '%d'
     return print_format
+
+
+def _format_metric_value(metric_name: str, value) -> str:
+    if metric_name == 'chi2_significant':
+        try:
+            if np.isnan(value):
+                return 'nan'
+        except TypeError:
+            pass
+        return str(bool(value))
+
+    try:
+        is_nan = np.isnan(value)
+    except TypeError:
+        is_nan = False
+    print_format = '%f' if is_nan else metric_name_to_print_format(metric_name)
+    return print_format % value
 
 
 def print_final_metrics(metrics: TrackingMetrics) -> None:
@@ -86,8 +104,7 @@ def print_final_metrics(metrics: TrackingMetrics) -> None:
 
         for metric_name in metric_names:
             val = metrics.label_metrics[metric_name][class_name]
-            print_format = '%f' if np.isnan(val) else metric_name_to_print_format(metric_name)
-            print('\t%s' % (print_format % val), end='')
+            print('\t%s' % _format_metric_value(metric_name, val), end='')
 
         print()
 
@@ -95,8 +112,7 @@ def print_final_metrics(metrics: TrackingMetrics) -> None:
     print('\nAggregated results:')
     for metric_name in metric_names:
         val = metrics.compute_metric(metric_name, 'all')
-        print_format = metric_name_to_print_format(metric_name)
-        print('%s\t%s' % (metric_name.upper(), print_format % val))
+        print('%s\t%s' % (metric_name.upper(), _format_metric_value(metric_name, val)))
 
     print('Eval time: %.1fs' % metrics.eval_time)
     print()

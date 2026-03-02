@@ -8,13 +8,35 @@ import numpy as np
 from pyquaternion import Quaternion
 
 from nuscenes.eval.common.config import config_factory
-from nuscenes.eval.tracking.algo import TrackingEvaluation
+from nuscenes.eval.tracking.algo import TrackingEvaluation, categorize_mahalanobis_distances, pearson_chi2_two_category
 from nuscenes.eval.tracking.data_classes import TrackingMetricData, TrackingBox
 from nuscenes.eval.tracking.loaders import interpolate_tracks
 from nuscenes.eval.tracking.tests.scenarios import get_scenarios
 
 
 class TestAlgo(unittest.TestCase):
+
+    def test_mahalanobis_threshold_categorization(self):
+        values = np.array([1.0, 2.0, 5.0, 7.0], dtype=float)
+        stats = categorize_mahalanobis_distances(values, dof=2, alpha_maha=0.05)
+
+        self.assertAlmostEqual(stats['maha_threshold'], 5.991464547107979)
+        self.assertEqual(stats['count_inside'], 3.0)
+        self.assertEqual(stats['count_outside'], 1.0)
+        self.assertEqual(stats['pct_inside'], 75.0)
+        self.assertEqual(stats['pct_outside'], 25.0)
+
+    def test_pearson_chi2_two_category_decision(self):
+        non_significant = pearson_chi2_two_category(90.0, 10.0, alpha_maha=0.05, alpha_chi2=0.01)
+        significant = pearson_chi2_two_category(80.0, 20.0, alpha_maha=0.05, alpha_chi2=0.01)
+
+        self.assertAlmostEqual(non_significant['chi2_statistic'], 5.263157894736842)
+        self.assertAlmostEqual(non_significant['chi2_critical'], 6.6348966010212145)
+        self.assertEqual(non_significant['chi2_significant'], 0.0)
+
+        self.assertAlmostEqual(significant['chi2_statistic'], 47.368421052631575)
+        self.assertAlmostEqual(significant['chi2_critical'], 6.6348966010212145)
+        self.assertEqual(significant['chi2_significant'], 1.0)
 
     @staticmethod
     def single_scene() -> Tuple[str, Dict[str, Dict[int, List[TrackingBox]]]]:
@@ -288,6 +310,13 @@ class TestAlgo(unittest.TestCase):
         self.assertAlmostEqual(float(np.nanmin(md.tp_orientation_error_mean)), 0.0)
         self.assertAlmostEqual(float(np.nanmin(md.nees_mean)), 0.25)
         self.assertAlmostEqual(float(np.nanmin(md.nees_calibration_score)), (0.25 - 9.0) ** 2)
+        self.assertAlmostEqual(float(np.nanmin(md.count_inside)), 4.0)
+        self.assertAlmostEqual(float(np.nanmin(md.count_outside)), 0.0)
+        self.assertAlmostEqual(float(np.nanmin(md.pct_inside)), 100.0)
+        self.assertAlmostEqual(float(np.nanmin(md.pct_outside)), 0.0)
+        self.assertAlmostEqual(float(np.nanmin(md.maha_threshold)), 16.918977604620448)
+        self.assertAlmostEqual(float(np.nanmin(md.chi2_critical)), 6.6348966010212145)
+        self.assertAlmostEqual(float(np.nanmin(md.chi2_significant)), 0.0)
 
     def test_nees_warns_on_non_symmetric_covariance(self):
         cfg = config_factory('tracking_nips_2019')

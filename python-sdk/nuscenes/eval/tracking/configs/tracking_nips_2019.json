@@ -58,5 +58,7 @@
     "tid": 20,
     "lgd": 20
   },
-  "num_thresholds": 40
+  "num_thresholds": 40,
+  "alpha_maha": 0.05,
+  "alpha_chi2": 0.01
 }

@@ -4,6 +4,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.stats import chi2
 
 from nuscenes.eval.common.data_classes import MetricData, EvalBox
 from nuscenes.eval.common.utils import center_distance
@@ -27,7 +28,9 @@ class TrackingConfig:
                  max_boxes_per_sample: float,
                  metric_worst: Dict[str, float],
                  num_thresholds: int,
-                 nees_state_indices: Optional[List[int]] = None):
+                 nees_state_indices: Optional[List[int]] = None,
+                 alpha_maha: float = 0.05,
+                 alpha_chi2: float = 0.01):
 
         assert set(class_range.keys()) == set(tracking_names), "Class count mismatch."
         global TRACKING_NAMES
@@ -43,6 +46,8 @@ class TrackingConfig:
         self.metric_worst = metric_worst
         self.num_thresholds = num_thresholds
         self.nees_state_indices = None if nees_state_indices is None else [int(v) for v in nees_state_indices]
+        self.alpha_maha = float(alpha_maha)
+        self.alpha_chi2 = float(alpha_chi2)
 
         TrackingMetricData.set_nelem(num_thresholds)
 
@@ -67,7 +72,9 @@ class TrackingConfig:
             'max_boxes_per_sample': self.max_boxes_per_sample,
             'metric_worst': self.metric_worst,
             'num_thresholds': self.num_thresholds,
-            'nees_state_indices': self.nees_state_indices
+            'nees_state_indices': self.nees_state_indices,
+            'alpha_maha': self.alpha_maha,
+            'alpha_chi2': self.alpha_chi2
         }
 
     @classmethod
@@ -83,7 +90,9 @@ class TrackingConfig:
                    content['max_boxes_per_sample'],
                    content['metric_worst'],
                    content['num_thresholds'],
-                   content.get('nees_state_indices'))
+                   content.get('nees_state_indices'),
+                   content.get('alpha_maha', 0.05),
+                   content.get('alpha_chi2', 0.01))
 
     @property
     def dist_fcn_callable(self):
@@ -127,6 +136,14 @@ class TrackingMetricData(MetricData):
         self.tp_orientation_error_mean = init
         self.nees_mean = init
         self.nees_calibration_score = init
+        self.maha_threshold = init
+        self.count_inside = init
+        self.count_outside = init
+        self.pct_inside = init
+        self.pct_outside = init
+        self.chi2_statistic = init
+        self.chi2_critical = init
+        self.chi2_significant = init
 
     def __eq__(self, other):
         eq = True
@@ -214,7 +231,7 @@ class TrackingMetrics:
 
         self.cfg = cfg
         self.eval_time = None
-        self.label_metrics: Dict[str, Dict[str, float]] = {}
+        self.label_metrics: Dict[str, Dict[str, Any]] = {}
         self.class_names = self.cfg.class_names
         self.metric_names = [l for l in TRACKING_METRICS]
 
@@ -224,31 +241,126 @@ class TrackingMetrics:
             for class_name in self.class_names:
                 self.label_metrics[metric_name][class_name] = np.nan
 
-    def add_label_metric(self, metric_name: str, tracking_name: str, value: float) -> None:
+    def add_label_metric(self, metric_name: str, tracking_name: str, value: Any) -> None:
         assert metric_name in self.label_metrics
-        self.label_metrics[metric_name][tracking_name] = float(value)
+        if isinstance(value, (bool, np.bool_)):
+            self.label_metrics[metric_name][tracking_name] = bool(value)
+        else:
+            self.label_metrics[metric_name][tracking_name] = float(value)
+
+    @staticmethod
+    def _is_nan_value(value: Any) -> bool:
+        try:
+            return bool(np.isnan(value))
+        except TypeError:
+            return False
+
+    @staticmethod
+    def _chi2_significance_from_counts(count_inside: float,
+                                       count_outside: float,
+                                       alpha_maha: float,
+                                       alpha_chi2: float) -> Tuple[float, float, bool]:
+        if np.isnan(count_inside) or np.isnan(count_outside):
+            return np.nan, np.nan, False
+
+        total = float(count_inside + count_outside)
+        if total <= 0:
+            return np.nan, np.nan, False
+
+        expected_inside = (1.0 - alpha_maha) * total
+        expected_outside = alpha_maha * total
+        chi2_stat = 0.0
+        for observed, expected in [(float(count_inside), expected_inside), (float(count_outside), expected_outside)]:
+            if expected <= 0:
+                return np.nan, np.nan, False
+            chi2_stat += (observed - expected) ** 2 / expected
+
+        critical = float(chi2.ppf(1.0 - alpha_chi2, 1))
+        return float(chi2_stat), critical, bool(chi2_stat > critical)
 
     def add_runtime(self, eval_time: float) -> None:
         self.eval_time = eval_time
 
-    def compute_metric(self, metric_name: str, class_name: str = 'all') -> float:
+    def compute_metric(self, metric_name: str, class_name: str = 'all') -> Any:
         if class_name == 'all':
             data = list(self.label_metrics[metric_name].values())
             if len(data) > 0:
+                if metric_name == 'chi2_significant':
+                    count_inside = self.compute_metric('count_inside', 'all')
+                    count_outside = self.compute_metric('count_outside', 'all')
+                    _, _, significant = self._chi2_significance_from_counts(
+                        count_inside,
+                        count_outside,
+                        self.cfg.alpha_maha,
+                        self.cfg.alpha_chi2
+                    )
+                    return significant
+                if metric_name == 'chi2_statistic':
+                    count_inside = self.compute_metric('count_inside', 'all')
+                    count_outside = self.compute_metric('count_outside', 'all')
+                    chi2_stat, _, _ = self._chi2_significance_from_counts(
+                        count_inside,
+                        count_outside,
+                        self.cfg.alpha_maha,
+                        self.cfg.alpha_chi2
+                    )
+                    return chi2_stat
+                if metric_name == 'chi2_critical':
+                    count_inside = self.compute_metric('count_inside', 'all')
+                    count_outside = self.compute_metric('count_outside', 'all')
+                    _, critical, _ = self._chi2_significance_from_counts(
+                        count_inside,
+                        count_outside,
+                        self.cfg.alpha_maha,
+                        self.cfg.alpha_chi2
+                    )
+                    return critical
+                if metric_name in ['pct_inside', 'pct_outside']:
+                    count_inside = self.compute_metric('count_inside', 'all')
+                    count_outside = self.compute_metric('count_outside', 'all')
+                    total = count_inside + count_outside
+                    if np.isnan(total) or total <= 0:
+                        return np.nan
+                    if metric_name == 'pct_inside':
+                        return float(count_inside / total * 100.0)
+                    return float(count_outside / total * 100.0)
+                if metric_name == 'maha_threshold':
+                    dof = len(self.cfg.nees_state_indices) if self.cfg.nees_state_indices is not None else 9
+                    return float(chi2.ppf(1.0 - self.cfg.alpha_maha, dof))
+
                 # Some metrics need to be summed, not averaged.
                 # Nan entries are ignored.
-                if metric_name in ['mt', 'ml', 'tp', 'fp', 'fn', 'ids', 'frag']:
+                if metric_name in ['mt', 'ml', 'tp', 'fp', 'fn', 'ids', 'frag', 'count_inside', 'count_outside']:
                     return float(np.nansum(data))
                 else:
-                    return float(np.nanmean(data))
+                    numeric_data = [float(v) for v in data if not self._is_nan_value(v)]
+                    if len(numeric_data) == 0:
+                        return np.nan
+                    return float(np.nanmean(numeric_data))
             else:
                 return np.nan
         else:
-            return float(self.label_metrics[metric_name][class_name])
+            value = self.label_metrics[metric_name][class_name]
+            if metric_name == 'chi2_significant':
+                if self._is_nan_value(value):
+                    return np.nan
+                return bool(value)
+            return float(value)
 
     def serialize(self) -> Dict[str, Any]:
         metrics = dict()
-        metrics['label_metrics'] = self.label_metrics
+        label_metrics_serialized = {
+            metric_name: dict(metric_values)
+            for metric_name, metric_values in self.label_metrics.items()
+        }
+        if 'chi2_significant' in label_metrics_serialized:
+            for class_name, value in label_metrics_serialized['chi2_significant'].items():
+                try:
+                    label_metrics_serialized['chi2_significant'][class_name] = None if np.isnan(value) else bool(value)
+                except TypeError:
+                    label_metrics_serialized['chi2_significant'][class_name] = bool(value)
+
+        metrics['label_metrics'] = label_metrics_serialized
         metrics['eval_time'] = self.eval_time
         metrics['cfg'] = self.cfg.serialize()
         for metric_name in self.label_metrics.keys():

@@ -289,11 +289,20 @@ Furthermore we propose a number of additional metrics:
 * **TP Orientation Error Mean** (`tp_orientation_error_mean`, radians): Mean yaw error over true-positive matches.
 * **NEES Mean** (`nees_mean`): Mean normalized estimation error squared over true-positive matches with covariance.
 * **NEES Calibration Score** (`nees_calibration_score`): $(nees\_mean - dof)^2$, where `dof` is the number of state components used in NEES.
+* **Mahalanobis Threshold** (`maha_threshold`): Chi-squared critical value $\chi^2_{dof}(1-\alpha_{maha})$ used to classify NEES values as inside/outside.
+* **Inside/Outside Counts** (`count_inside`, `count_outside`): Number of NEES samples at or below / above `maha_threshold`.
+* **Inside/Outside Percentages** (`pct_inside`, `pct_outside`): Percentage of NEES samples inside/outside `maha_threshold`.
+* **Pearson Chi-squared Statistic** (`chi2_statistic`): Two-category Pearson test statistic over inside/outside counts with expected proportions $(1-\alpha_{maha},\alpha_{maha})$.
+* **Pearson Chi-squared Critical Value** (`chi2_critical`): Critical value $\chi^2_1(1-\alpha_{chi2})$.
+* **Pearson Significance Decision** (`chi2_significant`): Boolean decision from `chi2_statistic > chi2_critical`.
 
 If covariance is missing in the result file, evaluation still runs and NEES metrics are reported as `NaN` with warnings.
 
 ### Configuration
 The default evaluation metrics configurations can be found in `nuscenes/eval/tracking/configs/tracking_nips_2019.json`.
+The NEES significance test can be configured via:
+* `alpha_maha` (default `0.05`) for the Mahalanobis acceptance threshold.
+* `alpha_chi2` (default `0.01`) for the Pearson chi-squared significance decision.
 
 ### Baselines
 To allow the user focus on the tracking problem, we release object detections from state-of-the-art methods as listed on the [detection leaderboard](https://www.nuscenes.org/object-detection).
