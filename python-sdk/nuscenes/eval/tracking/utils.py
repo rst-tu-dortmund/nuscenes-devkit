@@ -55,7 +55,13 @@ def metric_name_to_print_format(metric_name) -> str:
         'tp_translation_error_mean', 'tp_scale_error_mean', 'tp_velocity_error_mean',
         'tp_orientation_error_mean', 'nees_mean', 'nees_calibration_score',
         'maha_threshold', 'pct_inside', 'pct_outside', 'chi2_statistic', 'chi2_critical'
-    ]:
+    ] or metric_name.endswith('/mean_NEES') \
+            or metric_name.endswith('/nees_calibration_score') \
+            or metric_name.endswith('/chi_squared/maha_threshold') \
+            or metric_name.endswith('/chi_squared/pct_inside') \
+            or metric_name.endswith('/chi_squared/pct_outside') \
+            or metric_name.endswith('/chi_squared/chi2_statistic') \
+            or metric_name.endswith('/chi_squared/chi2_critical'):
         print_format = '%.3f'
     elif metric_name in ['tid', 'lgd']:
         print_format = '%.2f'

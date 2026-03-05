@@ -13,8 +13,7 @@ from nuscenes import NuScenes
 from nuscenes.eval.common.config import config_factory
 from nuscenes.eval.common.loaders import load_prediction, load_gt, add_center_dist, filter_eval_boxes
 from nuscenes.eval.tracking.algo import TrackingEvaluation
-from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS, TP_ERROR_METRICS, NEES_METRICS, \
-    NEES_SIGNIFICANCE_METRICS
+from nuscenes.eval.tracking.constants import AVG_METRIC_MAP, MOT_METRIC_MAP, LEGACY_METRICS, TP_ERROR_METRICS
 from nuscenes.eval.tracking.data_classes import TrackingMetrics, TrackingMetricDataList, TrackingConfig, TrackingBox, \
     TrackingMetricData
 from nuscenes.eval.tracking.loaders import create_tracks
@@ -177,13 +176,18 @@ class TrackingEval:
             else:
                 best_thresh_idx = np.nanargmax(md.mota)
 
+            uncertainty_metric_names = [
+                metric_name for metric_name in md.serialize().keys()
+                if metric_name.startswith('uncertainty/')
+            ]
+
             # Pick best value for traditional metrics.
             if best_thresh_idx is not None:
-                for metric_name in [*MOT_METRIC_MAP.values(), *NEES_METRICS, *NEES_SIGNIFICANCE_METRICS]:
+                for metric_name in [*MOT_METRIC_MAP.values(), *uncertainty_metric_names]:
                     if metric_name == '':
                         continue
                     value = md.get_metric(metric_name)[best_thresh_idx]
-                    if metric_name == 'chi2_significant' and not np.isnan(value):
+                    if metric_name.endswith('/is_significant') and not np.isnan(value):
                         value = bool(value)
                     metrics.add_label_metric(metric_name, class_name, value)
 

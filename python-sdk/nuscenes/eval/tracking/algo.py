@@ -12,7 +12,7 @@ https://github.com/cheind/py-motmetrics
 """
 import os
 import warnings
-from typing import List, Dict, Callable, Tuple
+from typing import List, Dict, Callable, Tuple, Any
 import unittest
 
 import numpy as np
@@ -26,7 +26,8 @@ except ModuleNotFoundError:
     raise unittest.SkipTest('Skipping test as pandas was not found!')
 
 from nuscenes.eval.tracking.constants import MOT_METRIC_MAP, TRACKING_METRICS
-from nuscenes.eval.tracking.data_classes import TrackingBox, TrackingMetricData
+from nuscenes.eval.tracking.data_classes import TrackingBox, TrackingMetricData, normalize_nees_state_indices_groups, \
+    state_indices_group_to_key
 from nuscenes.eval.common.utils import center_distance, scale_iou, velocity_l2, yaw_diff, quaternion_yaw
 from pyquaternion import Quaternion
 from nuscenes.eval.tracking.mot import MOTAccumulatorCustom
@@ -246,7 +247,7 @@ class TrackingEvaluation(object):
                  min_recall: float,
                  num_thresholds: int,
                  metric_worst: Dict[str, float],
-                 nees_state_indices: List[int] = None,
+                 nees_state_indices: Any = None,
                  alpha_maha: float = 0.05,
                  alpha_chi2: float = 0.01,
                  verbose: bool = True,
@@ -284,6 +285,7 @@ class TrackingEvaluation(object):
         self.num_thresholds = num_thresholds
         self.metric_worst = metric_worst
         self.nees_state_indices = nees_state_indices
+        self.nees_state_indices_groups = normalize_nees_state_indices_groups(nees_state_indices)
         self.alpha_maha = float(alpha_maha)
         self.alpha_chi2 = float(alpha_chi2)
         self.verbose = verbose
@@ -300,6 +302,34 @@ class TrackingEvaluation(object):
         # Check that metric definitions are consistent.
         for metric_name in MOT_METRIC_MAP.values():
             assert metric_name == '' or metric_name in TRACKING_METRICS
+
+    @staticmethod
+    def _default_nees_state_indices() -> List[int]:
+        return list(range(9))
+
+    def _resolved_nees_groups(self) -> List[List[int]]:
+        if self.nees_state_indices_groups is None:
+            return [self._default_nees_state_indices()]
+        return [list(group) for group in self.nees_state_indices_groups]
+
+    def _nees_group_keys(self) -> List[str]:
+        return [state_indices_group_to_key(group) for group in self._resolved_nees_groups()]
+
+    @staticmethod
+    def _uncertainty_metric_keys(group_key: str) -> Dict[str, str]:
+        prefix = f'uncertainty/{group_key}'
+        return {
+            'nees_mean': f'{prefix}/mean_NEES',
+            'nees_calibration_score': f'{prefix}/nees_calibration_score',
+            'maha_threshold': f'{prefix}/chi_squared/maha_threshold',
+            'count_inside': f'{prefix}/chi_squared/count_inside',
+            'count_outside': f'{prefix}/chi_squared/count_outside',
+            'pct_inside': f'{prefix}/chi_squared/pct_inside',
+            'pct_outside': f'{prefix}/chi_squared/pct_outside',
+            'chi2_statistic': f'{prefix}/chi_squared/chi2_statistic',
+            'chi2_critical': f'{prefix}/chi_squared/chi2_critical',
+            'chi2_significant': f'{prefix}/chi_squared/is_significant'
+        }
 
     def accumulate(self) -> TrackingMetricData:
         """
@@ -420,30 +450,33 @@ class TrackingEvaluation(object):
             assert len(all_values) == TrackingMetricData.nelem
             md.set_metric(metric_name, all_values)
 
-        # Store TP error and NEES metrics.
-        extended_metric_names = [
+        # Store TP error metrics.
+        tp_metric_names = [
             'tp_translation_error_mean',
             'tp_scale_error_mean',
             'tp_velocity_error_mean',
-            'tp_orientation_error_mean',
-            'nees_mean',
-            'nees_calibration_score',
-            'maha_threshold',
-            'count_inside',
-            'count_outside',
-            'pct_inside',
-            'pct_outside',
-            'chi2_statistic',
-            'chi2_critical',
-            'chi2_significant'
+            'tp_orientation_error_mean'
         ]
 
+        nees_group_keys = self._nees_group_keys()
+        nees_metric_name_groups = {
+            group_key: self._uncertainty_metric_keys(group_key)
+            for group_key in nees_group_keys
+        }
+
         if len(tp_metric_stats_by_threshold) == 0:
-            for metric_name in extended_metric_names:
+            for metric_name in tp_metric_names:
                 md.set_metric(metric_name, [np.nan] * TrackingMetricData.nelem)
+            for metric_name_group in nees_metric_name_groups.values():
+                for metric_name in metric_name_group.values():
+                    md.set_metric(metric_name, [np.nan] * TrackingMetricData.nelem)
             return md
 
-        per_threshold_metrics = {metric_name: [] for metric_name in extended_metric_names}
+        per_threshold_metrics = {metric_name: [] for metric_name in tp_metric_names}
+        per_threshold_nees_metrics = {
+            group_key: {metric_name: [] for metric_name in metric_name_group.values()}
+            for group_key, metric_name_group in nees_metric_name_groups.items()
+        }
         for stats in tp_metric_stats_by_threshold:
             for metric_name in TP_ERROR_METRIC_MAP.keys():
                 metric_count = stats['tp_error_counts'][metric_name]
@@ -453,36 +486,41 @@ class TrackingEvaluation(object):
                     value = stats['tp_error_sums'][metric_name] / metric_count
                 per_threshold_metrics[metric_name].append(value)
 
-            if stats['nees_count'] == 0:
-                nees_mean = np.nan
-            else:
-                nees_mean = stats['nees_sum'] / stats['nees_count']
-            per_threshold_metrics['nees_mean'].append(nees_mean)
+            for group_key, group_metric_names in nees_metric_name_groups.items():
+                group_stats = stats['nees_stats'][group_key]
 
-            if np.isnan(nees_mean) or np.isnan(stats['nees_dof']):
-                calibration = np.nan
-            else:
-                calibration = (nees_mean - stats['nees_dof']) ** 2
-            per_threshold_metrics['nees_calibration_score'].append(calibration)
+                if group_stats['nees_count'] == 0:
+                    nees_mean = np.nan
+                else:
+                    nees_mean = group_stats['nees_sum'] / group_stats['nees_count']
+                per_threshold_nees_metrics[group_key][group_metric_names['nees_mean']].append(nees_mean)
 
-            significance_stats = categorize_mahalanobis_distances(
-                stats['nees_values'],
-                int(stats['nees_dof']) if np.isfinite(stats['nees_dof']) else 0,
-                self.alpha_maha
-            )
-            chi2_stats = pearson_chi2_two_category(
-                significance_stats['count_inside'],
-                significance_stats['count_outside'],
-                self.alpha_maha,
-                self.alpha_chi2
-            )
+                if np.isnan(nees_mean) or np.isnan(group_stats['nees_dof']):
+                    calibration = np.nan
+                else:
+                    calibration = (nees_mean - group_stats['nees_dof']) ** 2
+                per_threshold_nees_metrics[group_key][group_metric_names['nees_calibration_score']].append(calibration)
 
-            for metric_name in ['maha_threshold', 'count_inside', 'count_outside', 'pct_inside', 'pct_outside']:
-                per_threshold_metrics[metric_name].append(significance_stats[metric_name])
-            for metric_name in ['chi2_statistic', 'chi2_critical', 'chi2_significant']:
-                per_threshold_metrics[metric_name].append(chi2_stats[metric_name])
+                significance_stats = categorize_mahalanobis_distances(
+                    group_stats['nees_values'],
+                    int(group_stats['nees_dof']) if np.isfinite(group_stats['nees_dof']) else 0,
+                    self.alpha_maha
+                )
+                chi2_stats = pearson_chi2_two_category(
+                    significance_stats['count_inside'],
+                    significance_stats['count_outside'],
+                    self.alpha_maha,
+                    self.alpha_chi2
+                )
 
-        for metric_name in extended_metric_names:
+                for source_name in ['maha_threshold', 'count_inside', 'count_outside', 'pct_inside', 'pct_outside']:
+                    metric_name = group_metric_names[source_name]
+                    per_threshold_nees_metrics[group_key][metric_name].append(significance_stats[source_name])
+                for source_name in ['chi2_statistic', 'chi2_critical', 'chi2_significant']:
+                    metric_name = group_metric_names[source_name]
+                    per_threshold_nees_metrics[group_key][metric_name].append(chi2_stats[source_name])
+
+        for metric_name in tp_metric_names:
             values = np.array(per_threshold_metrics[metric_name], dtype=float)
             assert len(rep_counts) == len(values)
             values = np.concatenate([([v] * r) for (v, r) in zip(values, rep_counts)])
@@ -491,6 +529,17 @@ class TrackingEvaluation(object):
             all_values.extend(values)
             assert len(all_values) == TrackingMetricData.nelem
             md.set_metric(metric_name, all_values)
+
+        for group_key in nees_group_keys:
+            for metric_name, metric_values in per_threshold_nees_metrics[group_key].items():
+                values = np.array(metric_values, dtype=float)
+                assert len(rep_counts) == len(values)
+                values = np.concatenate([([v] * r) for (v, r) in zip(values, rep_counts)])
+
+                all_values = [np.nan] * num_unachieved_thresholds
+                all_values.extend(values)
+                assert len(all_values) == TrackingMetricData.nelem
+                md.set_metric(metric_name, all_values)
 
         return md
 
@@ -505,11 +554,19 @@ class TrackingEvaluation(object):
         scores = []  # The scores of the TPs. These are used to determine the recall thresholds initially.
         tp_error_sums = {metric_name: 0.0 for metric_name in TP_ERROR_METRIC_MAP.keys()}
         tp_error_counts = {metric_name: 0 for metric_name in TP_ERROR_METRIC_MAP.keys()}
-        nees_sum = 0.0
-        nees_count = 0
-        nees_values = []
-        nees_dof = np.nan
-        missing_covariance_for_nees = False
+        nees_groups = self._resolved_nees_groups()
+        nees_group_keys = [state_indices_group_to_key(group) for group in nees_groups]
+        nees_stats = {
+            group_key: {
+                'indices': list(group_indices),
+                'nees_sum': 0.0,
+                'nees_count': 0,
+                'nees_values': [],
+                'nees_dof': np.nan,
+                'missing_covariance_for_nees': False,
+            }
+            for group_key, group_indices in zip(nees_group_keys, nees_groups)
+        }
 
         # Go through all frames and associate ground truth and tracker results.
         # Groundtruth and tracker contain lists for every single frame containing lists detections.
@@ -580,19 +637,20 @@ class TrackingEvaluation(object):
                             tp_error_sums[metric_name] += value
                             tp_error_counts[metric_name] += 1
 
-                    nees_value, dof = compute_nees(
-                        gt_match,
-                        pred_match,
-                        state_indices=self.nees_state_indices,
-                        warn_prefix=f'Tracking NEES ({self.class_name})'
-                    )
-                    if np.isfinite(nees_value):
-                        nees_sum += nees_value
-                        nees_count += 1
-                        nees_values.append(nees_value)
-                        nees_dof = float(dof)
-                    elif pred_match.covariance is None:
-                        missing_covariance_for_nees = True
+                    for group_key, group_indices in zip(nees_group_keys, nees_groups):
+                        nees_value, dof = compute_nees(
+                            gt_match,
+                            pred_match,
+                            state_indices=group_indices,
+                            warn_prefix=f'Tracking NEES ({self.class_name}) [{group_key}]'
+                        )
+                        if np.isfinite(nees_value):
+                            nees_stats[group_key]['nees_sum'] += nees_value
+                            nees_stats[group_key]['nees_count'] += 1
+                            nees_stats[group_key]['nees_values'].append(nees_value)
+                            nees_stats[group_key]['nees_dof'] = float(dof)
+                        elif pred_match.covariance is None:
+                            nees_stats[group_key]['missing_covariance_for_nees'] = True
 
                 # Store scores of matches, which are used to determine recall thresholds.
                 if threshold is None:
@@ -612,20 +670,29 @@ class TrackingEvaluation(object):
         # Merge accumulators
         acc_merged = MOTAccumulatorCustom.merge_event_dataframes(accs)
 
-        if threshold is not None and sum(tp_error_counts.values()) > 0 and nees_count == 0 and missing_covariance_for_nees:
-            warnings.warn(
-                f'Tracking NEES unavailable for class {self.class_name} at threshold {threshold:.4f}: '
-                f'covariance missing for matched true positives.',
-                RuntimeWarning
-            )
+        if threshold is not None and sum(tp_error_counts.values()) > 0:
+            for group_key in nees_group_keys:
+                if nees_stats[group_key]['nees_count'] == 0 and nees_stats[group_key]['missing_covariance_for_nees']:
+                    warnings.warn(
+                        f'Tracking NEES unavailable for class {self.class_name} at threshold {threshold:.4f} '
+                        f'for state indices {group_key}: covariance missing for matched true positives.',
+                        RuntimeWarning
+                    )
+
+        nees_stats_out = {
+            group_key: {
+                'nees_sum': group_stats['nees_sum'],
+                'nees_count': group_stats['nees_count'],
+                'nees_values': np.array(group_stats['nees_values'], dtype=float),
+                'nees_dof': group_stats['nees_dof'],
+            }
+            for group_key, group_stats in nees_stats.items()
+        }
 
         tp_nees_stats = {
             'tp_error_sums': tp_error_sums,
             'tp_error_counts': tp_error_counts,
-            'nees_sum': nees_sum,
-            'nees_count': nees_count,
-            'nees_values': np.array(nees_values, dtype=float),
-            'nees_dof': nees_dof
+            'nees_stats': nees_stats_out
         }
 
         return acc_merged, scores, tp_nees_stats

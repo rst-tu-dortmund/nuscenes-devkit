@@ -14,6 +14,22 @@ from nuscenes.eval.tracking.constants import TRACKING_METRICS, AMOT_METRICS
 TRACKING_NAMES = []
 
 
+def _is_list_of_lists(value: Any) -> bool:
+    return isinstance(value, list) and len(value) > 0 and all(isinstance(v, list) for v in value)
+
+
+def normalize_nees_state_indices_groups(nees_state_indices: Any) -> Optional[List[List[int]]]:
+    if nees_state_indices is None:
+        return None
+    if _is_list_of_lists(nees_state_indices):
+        return [[int(v) for v in group] for group in nees_state_indices]
+    return [[int(v) for v in nees_state_indices]]
+
+
+def state_indices_group_to_key(state_indices: List[int]) -> str:
+    return '_'.join([str(int(v)) for v in state_indices])
+
+
 class TrackingConfig:
     """ Data class that specifies the tracking evaluation settings. """
 
@@ -45,7 +61,7 @@ class TrackingConfig:
         self.max_boxes_per_sample = max_boxes_per_sample
         self.metric_worst = metric_worst
         self.num_thresholds = num_thresholds
-        self.nees_state_indices = None if nees_state_indices is None else [int(v) for v in nees_state_indices]
+        self.nees_state_indices = normalize_nees_state_indices_groups(nees_state_indices)
         self.alpha_maha = float(alpha_maha)
         self.alpha_chi2 = float(alpha_chi2)
 
@@ -76,6 +92,10 @@ class TrackingConfig:
             'alpha_maha': self.alpha_maha,
             'alpha_chi2': self.alpha_chi2
         }
+
+    @property
+    def nees_state_indices_groups(self) -> Optional[List[List[int]]]:
+        return self.nees_state_indices
 
     @classmethod
     def deserialize(cls, content: dict):
@@ -187,7 +207,11 @@ class TrackingMetricData(MetricData):
     def serialize(self):
         """ Serialize instance into json-friendly format. """
         ret_dict = dict()
-        for metric_name in ['confidence', 'recall_hypo'] + TrackingMetricData.metrics:
+        dynamic_metric_names = [
+            metric_name for metric_name in self.__dict__.keys()
+            if metric_name not in ['confidence', 'recall_hypo'] + TrackingMetricData.metrics
+        ]
+        for metric_name in ['confidence', 'recall_hypo'] + TrackingMetricData.metrics + sorted(dynamic_metric_names):
             ret_dict[metric_name] = self.get_metric(metric_name).tolist()
         return ret_dict
 
@@ -199,7 +223,7 @@ class TrackingMetricData(MetricData):
     def deserialize(cls, content: dict):
         """ Initialize from serialized content. """
         md = cls()
-        for metric in ['confidence', 'recall_hypo'] + TrackingMetricData.metrics:
+        for metric in content.keys():
             md.set_metric(metric, content[metric])
         return md
 
@@ -242,7 +266,10 @@ class TrackingMetrics:
                 self.label_metrics[metric_name][class_name] = np.nan
 
     def add_label_metric(self, metric_name: str, tracking_name: str, value: Any) -> None:
-        assert metric_name in self.label_metrics
+        if metric_name not in self.label_metrics:
+            self.label_metrics[metric_name] = {}
+            for class_name in self.class_names:
+                self.label_metrics[metric_name][class_name] = np.nan
         if isinstance(value, (bool, np.bool_)):
             self.label_metrics[metric_name][tracking_name] = bool(value)
         else:
@@ -285,9 +312,16 @@ class TrackingMetrics:
         if class_name == 'all':
             data = list(self.label_metrics[metric_name].values())
             if len(data) > 0:
-                if metric_name == 'chi2_significant':
-                    count_inside = self.compute_metric('count_inside', 'all')
-                    count_outside = self.compute_metric('count_outside', 'all')
+                if metric_name == 'chi2_significant' or metric_name.endswith('/is_significant'):
+                    if metric_name == 'chi2_significant':
+                        count_inside_metric = 'count_inside'
+                        count_outside_metric = 'count_outside'
+                    else:
+                        prefix = metric_name[:metric_name.rfind('/')]
+                        count_inside_metric = f'{prefix}/count_inside'
+                        count_outside_metric = f'{prefix}/count_outside'
+                    count_inside = self.compute_metric(count_inside_metric, 'all')
+                    count_outside = self.compute_metric(count_outside_metric, 'all')
                     _, _, significant = self._chi2_significance_from_counts(
                         count_inside,
                         count_outside,
@@ -295,9 +329,16 @@ class TrackingMetrics:
                         self.cfg.alpha_chi2
                     )
                     return significant
-                if metric_name == 'chi2_statistic':
-                    count_inside = self.compute_metric('count_inside', 'all')
-                    count_outside = self.compute_metric('count_outside', 'all')
+                if metric_name == 'chi2_statistic' or metric_name.endswith('/chi2_statistic'):
+                    if metric_name == 'chi2_statistic':
+                        count_inside_metric = 'count_inside'
+                        count_outside_metric = 'count_outside'
+                    else:
+                        prefix = metric_name[:metric_name.rfind('/')]
+                        count_inside_metric = f'{prefix}/count_inside'
+                        count_outside_metric = f'{prefix}/count_outside'
+                    count_inside = self.compute_metric(count_inside_metric, 'all')
+                    count_outside = self.compute_metric(count_outside_metric, 'all')
                     chi2_stat, _, _ = self._chi2_significance_from_counts(
                         count_inside,
                         count_outside,
@@ -305,9 +346,16 @@ class TrackingMetrics:
                         self.cfg.alpha_chi2
                     )
                     return chi2_stat
-                if metric_name == 'chi2_critical':
-                    count_inside = self.compute_metric('count_inside', 'all')
-                    count_outside = self.compute_metric('count_outside', 'all')
+                if metric_name == 'chi2_critical' or metric_name.endswith('/chi2_critical'):
+                    if metric_name == 'chi2_critical':
+                        count_inside_metric = 'count_inside'
+                        count_outside_metric = 'count_outside'
+                    else:
+                        prefix = metric_name[:metric_name.rfind('/')]
+                        count_inside_metric = f'{prefix}/count_inside'
+                        count_outside_metric = f'{prefix}/count_outside'
+                    count_inside = self.compute_metric(count_inside_metric, 'all')
+                    count_outside = self.compute_metric(count_outside_metric, 'all')
                     _, critical, _ = self._chi2_significance_from_counts(
                         count_inside,
                         count_outside,
@@ -315,22 +363,37 @@ class TrackingMetrics:
                         self.cfg.alpha_chi2
                     )
                     return critical
-                if metric_name in ['pct_inside', 'pct_outside']:
-                    count_inside = self.compute_metric('count_inside', 'all')
-                    count_outside = self.compute_metric('count_outside', 'all')
+                if metric_name in ['pct_inside', 'pct_outside'] or \
+                        metric_name.endswith('/pct_inside') or metric_name.endswith('/pct_outside'):
+                    if metric_name in ['pct_inside', 'pct_outside']:
+                        count_inside_metric = 'count_inside'
+                        count_outside_metric = 'count_outside'
+                        is_inside_metric = metric_name == 'pct_inside'
+                    else:
+                        prefix = metric_name[:metric_name.rfind('/')]
+                        count_inside_metric = f'{prefix}/count_inside'
+                        count_outside_metric = f'{prefix}/count_outside'
+                        is_inside_metric = metric_name.endswith('/pct_inside')
+                    count_inside = self.compute_metric(count_inside_metric, 'all')
+                    count_outside = self.compute_metric(count_outside_metric, 'all')
                     total = count_inside + count_outside
                     if np.isnan(total) or total <= 0:
                         return np.nan
-                    if metric_name == 'pct_inside':
+                    if is_inside_metric:
                         return float(count_inside / total * 100.0)
                     return float(count_outside / total * 100.0)
-                if metric_name == 'maha_threshold':
-                    dof = len(self.cfg.nees_state_indices) if self.cfg.nees_state_indices is not None else 9
+                if metric_name == 'maha_threshold' or metric_name.endswith('/maha_threshold'):
+                    if metric_name == 'maha_threshold':
+                        dof = len(self.cfg.nees_state_indices[0]) if self.cfg.nees_state_indices is not None else 9
+                    else:
+                        group_key = metric_name.split('/')[1]
+                        dof = len([idx for idx in group_key.split('_') if idx != ''])
                     return float(chi2.ppf(1.0 - self.cfg.alpha_maha, dof))
 
                 # Some metrics need to be summed, not averaged.
                 # Nan entries are ignored.
-                if metric_name in ['mt', 'ml', 'tp', 'fp', 'fn', 'ids', 'frag', 'count_inside', 'count_outside']:
+                if metric_name in ['mt', 'ml', 'tp', 'fp', 'fn', 'ids', 'frag', 'count_inside', 'count_outside'] or \
+                        metric_name.endswith('/count_inside') or metric_name.endswith('/count_outside'):
                     return float(np.nansum(data))
                 else:
                     numeric_data = [float(v) for v in data if not self._is_nan_value(v)]
@@ -341,7 +404,7 @@ class TrackingMetrics:
                 return np.nan
         else:
             value = self.label_metrics[metric_name][class_name]
-            if metric_name == 'chi2_significant':
+            if metric_name == 'chi2_significant' or metric_name.endswith('/is_significant'):
                 if self._is_nan_value(value):
                     return np.nan
                 return bool(value)
@@ -353,12 +416,13 @@ class TrackingMetrics:
             metric_name: dict(metric_values)
             for metric_name, metric_values in self.label_metrics.items()
         }
-        if 'chi2_significant' in label_metrics_serialized:
-            for class_name, value in label_metrics_serialized['chi2_significant'].items():
-                try:
-                    label_metrics_serialized['chi2_significant'][class_name] = None if np.isnan(value) else bool(value)
-                except TypeError:
-                    label_metrics_serialized['chi2_significant'][class_name] = bool(value)
+        for metric_name in label_metrics_serialized.keys():
+            if metric_name == 'chi2_significant' or metric_name.endswith('/is_significant'):
+                for class_name, value in label_metrics_serialized[metric_name].items():
+                    try:
+                        label_metrics_serialized[metric_name][class_name] = None if np.isnan(value) else bool(value)
+                    except TypeError:
+                        label_metrics_serialized[metric_name][class_name] = bool(value)
 
         metrics['label_metrics'] = label_metrics_serialized
         metrics['eval_time'] = self.eval_time
