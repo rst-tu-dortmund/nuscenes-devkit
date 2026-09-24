@@ -1,5 +1,6 @@
 # nuScenes dev-kit.
 # Code written by Holger Caesar, 2018.
+# Modified by Timo Osterburg and Stefan Schütte (TU Dortmund University), 2026, for CANMOT.
 
 from typing import Dict, List
 

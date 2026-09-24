@@ -1,5 +1,6 @@
 # nuScenes dev-kit.
 # Code written by Oscar Beijbom, 2019.
+# Modified by Timo Osterburg and Stefan Schütte (TU Dortmund University), 2026, for CANMOT.
 
 import json
 from typing import Dict, Tuple

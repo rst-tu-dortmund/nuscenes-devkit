@@ -1,3 +1,5 @@
+# Modified by Timo Osterburg and Stefan Schütte (TU Dortmund University), 2026, for CANMOT.
+
 import unittest
 
 from nuscenes.eval.common.config import config_factory
