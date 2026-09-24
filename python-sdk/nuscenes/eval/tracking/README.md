@@ -1,6 +1,8 @@
 # nuScenes tracking task 
 ![nuScenes Tracking logo](https://www.nuscenes.org/public/images/tracking_challenge.png)
 
+> **Note:** Modified by Timo Osterburg (TU Dortmund University), 2026, for CANMOT. This page documents additional metrics that are not part of the official nuScenes tracking challenge.
+
 ## Overview
 - [Introduction](#introduction)
 - [Authors](#authors)

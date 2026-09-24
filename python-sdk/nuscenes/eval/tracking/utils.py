@@ -1,5 +1,6 @@
 # nuScenes dev-kit.
 # Code written by Holger Caesar, 2019.
+# Modified by Timo Osterburg (TU Dortmund University), 2026, for CANMOT.
 
 import unittest
 import warnings
