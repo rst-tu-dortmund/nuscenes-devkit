@@ -115,7 +115,7 @@ def pearson_chi2_two_category(count_inside: float,
     return {
         'chi2_statistic': float(chi2_statistic),
         'chi2_critical': chi2_critical,
-        'chi2_significant': float(chi2_statistic <= chi2_critical)
+        'chi2_significant': float(chi2_statistic > chi2_critical)
     }
 
 
