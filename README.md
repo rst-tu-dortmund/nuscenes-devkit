@@ -1,4 +1,7 @@
 # <img src="https://cdn.cookielaw.org/logos/8c60fe9e-585e-46b1-8f92-eba17239401e/d3e43cda-e0a4-42f2-9c04-0e1900c3f68f/894f42e4-cba8-48e4-8a15-e9c3ea937950/motional_logo_horiz_fullcolor_rgb.png" height="46px" style="vertical-align: middle" /> nuScenes™ devkit
+
+> **Unofficial fork used by [CANMOT](https://github.com/rst-tu-dortmund/CANMOT).** This branch mirrors the upstream [nuScenes devkit](https://github.com/nutonomy/nuscenes-devkit) without modifications and is not affiliated with or endorsed by Motional or nuScenes. The CANMOT changes are on the `canmot-release` branch.
+
 Welcome to the Motionalᵀᴹ nuTonomy® downloadable driverless vehicle software page. Click on the green box above labeled "Code" to download a copy of the software described below.
 
 
