@@ -1,3 +1,4 @@
+# Modified by Timo Osterburg and Stefan Schütte (TU Dortmund University), 2026, for CANMOT.
 motmetrics<=1.1.3
 pandas>=0.24
 scipy>=1.7

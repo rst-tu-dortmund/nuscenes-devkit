@@ -1,4 +1,13 @@
 # nuScenes devkit
+
+> **Modified fork for [CANMOT](https://github.com/rst-tu-dortmund/CANMOT).** This is an unofficial, modified version of the [nuScenes devkit](https://github.com/nutonomy/nuscenes-devkit), not affiliated with or endorsed by Motional or nuScenes. Modified by Timo Osterburg and Stefan Schütte (TU Dortmund University), 2026, for CANMOT. Code changes are under `python-sdk/nuscenes/eval/` and `python-sdk/nuscenes/utils/splits.py`:
+>
+> - Evaluation on the `trainval` split and skipping of classes without detections
+> - True-positive error metrics (translation, scale, velocity, orientation) and NEES for tracking evaluation
+> - Pearson chi-squared significance test on NEES and multi-state NEES evaluation
+>
+> Modified files carry a notice in their header. The original code remains under the Apache License 2.0 (see `LICENSE.txt`).
+
 Welcome to the devkit of the [nuScenes](https://www.nuscenes.org/nuscenes) and [nuImages](https://www.nuscenes.org/nuimages) datasets.
 ![](https://www.nuscenes.org/public/images/road.jpg)
 
